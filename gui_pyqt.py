@@ -930,8 +930,13 @@ class VideoUniquifierApp(QMainWindow):
         angles_title.setProperty("class", "label-section")
         angles_layout.addWidget(angles_title)
 
+        angles_info = QLabel("Каждому углу соответствует свой зум, чтобы скрыть углы после поворота")
+        angles_info.setProperty("class", "label-muted")
+        angles_info.setWordWrap(True)
+        angles_layout.addWidget(angles_info)
+
         self.angle_entries = {}
-        for angle in [-15, -10, -5, 0, 5, 10, 15]:
+        for angle in [-3, -2, -1, 1, 2, 3]:
             self.create_angle_zoom_input(angles_layout, angle)
 
         layout.addWidget(angles_card)
@@ -1781,10 +1786,10 @@ class VideoUniquifierApp(QMainWindow):
 
     def get_random_filters(self):
         filters = []
-        effects = self.config['effects_settings']
+        effects = self.config.get('effects_settings', {})
 
-        if random.random() < effects['color_balance_probability']:
-            range_val = effects['color_balance_range']
+        if random.random() < effects.get('color_balance_probability', 0.7):
+            range_val = effects.get('color_balance_range', 0.05)
             rs = random.uniform(-range_val, range_val)
             gs = random.uniform(-range_val, range_val)
             bs = random.uniform(-range_val, range_val)
@@ -1793,34 +1798,31 @@ class VideoUniquifierApp(QMainWindow):
             bm = random.uniform(-range_val, range_val)
             filters.append(f"colorbalance=rs={rs:.3f}:gs={gs:.3f}:bs={bs:.3f}:rm={rm:.3f}:gm={gm:.3f}:bm={bm:.3f}")
 
-        if random.random() < effects['brightness_contrast_probability']:
-            brightness = random.uniform(-effects['brightness_range'], effects['brightness_range'])
-            contrast = random.uniform(effects['contrast_min'], effects['contrast_max'])
+        if random.random() < effects.get('brightness_contrast_probability', 0.5):
+            brightness = random.uniform(-effects.get('brightness_range', 0.02), effects.get('brightness_range', 0.02))
+            contrast = random.uniform(effects.get('contrast_min', 0.98), effects.get('contrast_max', 1.02))
             filters.append(f"eq=brightness={brightness:.3f}:contrast={contrast:.3f}")
 
-        if random.random() < effects['saturation_probability']:
-            saturation = random.uniform(effects['saturation_min'], effects['saturation_max'])
+        if random.random() < effects.get('saturation_probability', 0.5):
+            saturation = random.uniform(effects.get('saturation_min', 0.95), effects.get('saturation_max', 1.05))
             filters.append(f"eq=saturation={saturation:.3f}")
 
         return filters
 
     def uniquify_video(self, input_video, music_video, output_video):
-        temp_video = None
         try:
             orig_w, orig_h = self.get_video_resolution(input_video)
 
-            angle_zoom_map = {int(k): v for k, v in self.config['angle_zoom_map'].items()}
+            angle_zoom_map = {int(k): v for k, v in self.config.get('angle_zoom_map', {}).items()}
             angle_degrees = random.choice(list(angle_zoom_map.keys()))
             zoom_factor = angle_zoom_map[angle_degrees]
             angle_radians = angle_degrees * math.pi / 180
 
-            # Используем вероятность зеркалирования из настроек
-            mirror_prob = self.config['effects_settings']['mirror_probability']
+            mirror_prob = self.config.get('effects_settings', {}).get('mirror_probability', 0.5)
             mirror = random.random() < mirror_prob
 
-            # Получаем настройки видео
-            video_settings = self.config['video_settings']
-            resolution = video_settings['output_resolution'].split('x')
+            video_settings = self.config.get('video_settings', {})
+            resolution = video_settings.get('output_resolution', '1080x1920').split('x')
             output_width = int(resolution[0])
             output_height = int(resolution[1])
 
@@ -1844,7 +1846,7 @@ class VideoUniquifierApp(QMainWindow):
 
             video_filter = ",".join(filter_parts)
 
-            add_music = self.config['add_music']
+            add_music = self.config.get('add_music', True)
 
             temp_video = output_video if not add_music else output_video.replace('.mp4', '_temp.mp4')
 
@@ -1853,30 +1855,30 @@ class VideoUniquifierApp(QMainWindow):
                 "-hide_banner", "-loglevel", "error",
                 "-i", input_video,
                 "-filter:v", video_filter,
-                "-c:v", video_settings['video_codec'],
-                "-preset", video_settings['video_preset'],
-                "-crf", str(video_settings['video_crf']),
-                "-pix_fmt", video_settings['pixel_format'],
+                "-c:v", video_settings.get('video_codec', 'libx264'),
+                "-preset", video_settings.get('video_preset', 'veryfast'),
+                "-crf", str(video_settings.get('video_crf', 23)),
+                "-pix_fmt", video_settings.get('pixel_format', 'yuv420p'),
             ]
 
             if add_music:
-                cmd1.append("-an")  # Remove audio if adding music
+                cmd1.append("-an")
             else:
-                cmd1.extend(["-c:a", video_settings['audio_codec'], "-b:a", video_settings['audio_bitrate']])
+                cmd1.extend(["-c:a", video_settings.get('audio_codec', 'aac'), "-b:a", video_settings.get('audio_bitrate', '128k')])
 
             cmd1.extend(["-y", temp_video])
 
             subprocess.run(cmd1, check=True)
 
-            if add_music:
+            if add_music and music_video:
                 cmd2 = [
                     "ffmpeg",
                     "-hide_banner", "-loglevel", "error",
                     "-i", temp_video,
                     "-i", music_video,
                     "-c:v", "copy",
-                    "-c:a", video_settings['audio_codec'],
-                    "-b:a", video_settings['audio_bitrate'],
+                    "-c:a", video_settings.get('audio_codec', 'aac'),
+                    "-b:a", video_settings.get('audio_bitrate', '128k'),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
                     "-shortest",
@@ -1896,13 +1898,8 @@ class VideoUniquifierApp(QMainWindow):
             return True
         except Exception as e:
             self.log(f"✗ {os.path.basename(output_video)} | Error: {str(e)}")
-            import traceback
-            self.log(traceback.format_exc())
-            if temp_video and os.path.exists(temp_video):
-                try:
-                    os.remove(temp_video)
-                except:
-                    pass
+            if 'temp_video' in locals() and os.path.exists(temp_video):
+                os.remove(temp_video)
             return False
 
     def start_telegram_bot(self):
@@ -1998,14 +1995,14 @@ class VideoUniquifierApp(QMainWindow):
         layout.addWidget(label)
 
         entry = QLineEdit()
-        entry.setText(str(self.config.get('angle_zoom_map', {}).get(angle, 1.0)))
+        entry.setText(str(self.config.get('angle_zoom_map', {}).get(str(angle), 1.0)))
         entry.setMaximumWidth(100)
         entry.textChanged.connect(self.auto_save_settings)
         layout.addWidget(entry)
         layout.addStretch()
 
         parent.addWidget(frame)
-        self.angle_entries[angle] = entry
+        self.angle_entries[str(angle)] = entry
 
     def create_slider_input(self, parent, label, config_key, min_val, max_val, step=0.1):
         """Создать слайдер"""
